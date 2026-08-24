@@ -1090,20 +1090,39 @@ function openAddToPLModal(plId){
 
 /* ================= COMPROBACIÓN (Capataz) ================= */
 function renderComprobacion(){
-  const lists = DB.packinglists.filter(p=>p.estado==='SOL. ENVIADA' && p.enviado!==false).sort((a,b)=>b.creado-a.creado);
-  const byUser={};
-  lists.forEach(p=>{ (byUser[p.usuario]=byUser[p.usuario]||[]).push(p); });
-  const users = Object.keys(byUser).sort();
+  // Capataz revisa lo recién enviado (SOL. ENVIADA). Admin, además, ve lo ya
+  // comprobado por el capataz (COMPROBADA) para poder darle el visto bueno final
+  // (ENTRADA OK) sin tener que salir de esta pantalla.
+  const pendientes = DB.packinglists.filter(p=>p.estado==='SOL. ENVIADA' && p.enviado!==false).sort((a,b)=>b.creado-a.creado);
+  const comprobadas = SESSION.rol==='admin'
+    ? DB.packinglists.filter(p=>p.estado==='COMPROBADA' && p.enviado!==false).sort((a,b)=>b.creado-a.creado)
+    : [];
+
+  function groupByUser(lists){
+    const byUser={};
+    lists.forEach(p=>{ (byUser[p.usuario]=byUser[p.usuario]||[]).push(p); });
+    return byUser;
+  }
+  function renderGroup(lists, prefix){
+    const byUser = groupByUser(lists);
+    const users = Object.keys(byUser).sort();
+    if(!users.length) return '';
+    return users.map(u=>`
+      <details class="user-group" ${openGroup[prefix+'_'+u]?'open':''} data-group="${prefix}_${u}">
+        <summary>${u} (${byUser[u].length} entrada${byUser[u].length>1?'s':''})</summary>
+        ${byUser[u].map(p=>renderPLCard(p)).join('')}
+      </details>`).join('');
+  }
+
+  const vacio = !pendientes.length && !comprobadas.length;
   return `
   <div class="card">
     <h2>Comprobación de llegada de material</h2>
-    <p class="sub">Revisa cada packing list recibido y márcalo como comprobado.</p>
-    ${!users.length ? `<div class="empty-state"><div class="big">✅</div>No hay packing lists pendientes de comprobar.</div>` :
-      users.map(u=>`
-        <details class="user-group" ${openGroup['C_'+u]?'open':''} data-group="C_${u}">
-          <summary>${u} (${byUser[u].length} entrada${byUser[u].length>1?'s':''})</summary>
-          ${byUser[u].map(p=>renderPLCard(p)).join('')}
-        </details>`).join('')}
+    <p class="sub">${SESSION.rol==='admin' ? 'Revisa lo recién enviado y valida lo que el capataz ya ha comprobado.' : 'Revisa cada packing list recibido y márcalo como comprobado.'}</p>
+    ${vacio ? `<div class="empty-state"><div class="big">✅</div>No hay packing lists pendientes.</div>` : `
+      ${pendientes.length ? `<div class="block-title">Pendientes de comprobar</div>${renderGroup(pendientes,'C')}` : ''}
+      ${comprobadas.length ? `<div class="block-title">Comprobadas · pendientes de validar (ENTRADA OK)</div>${renderGroup(comprobadas,'V')}` : ''}
+    `}
   </div>`;
 }
 function bindComprobacion(){ bindListas(true); }
