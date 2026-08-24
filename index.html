@@ -169,21 +169,22 @@ tr:last-child td{border-bottom:none;}
 @media print{
   body>*{display:none !important;}
   #printArea{display:block !important;}
-  @page{size:A4;margin:12mm;}
+  @page{size:A4 landscape;margin:10mm;}
 }
-.label-sheet{width:100%;height:265mm;position:relative;font-family:Arial,Helvetica,sans-serif;border:3px solid var(--brand-dark, #0a3f52);border-radius:6px;padding:14mm 16mm;display:flex;flex-direction:column;}
-.label-top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:4px solid #0a3f52;padding-bottom:10mm;margin-bottom:12mm;}
-.label-code{font-size:54pt;font-weight:800;letter-spacing:1px;color:#0a3f52;line-height:1.05;word-break:break-word;}
-.label-type{display:inline-block;background:#0a3f52;color:#fff;font-size:16pt;font-weight:700;padding:4mm 8mm;border-radius:6mm;letter-spacing:2px;}
-.label-desc{font-size:26pt;font-weight:600;color:#1f2d34;margin:6mm 0 14mm;line-height:1.3;}
+.label-sheet{width:100%;height:190mm;position:relative;font-family:Arial,Helvetica,sans-serif;border:3px solid #000;border-radius:6px;padding:10mm 14mm;display:flex;flex-direction:column;filter:grayscale(1);}
+.label-top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:4px solid #000;padding-bottom:8mm;margin-bottom:8mm;}
+.label-code{font-size:50pt;font-weight:800;letter-spacing:1px;color:#000;line-height:1.05;word-break:break-word;}
+.label-type{display:inline-block;background:#000;color:#fff;font-size:15pt;font-weight:700;padding:4mm 8mm;border-radius:6mm;letter-spacing:2px;}
+.label-desc{font-size:24pt;font-weight:600;color:#000;margin:5mm 0 10mm;line-height:1.3;}
 .label-grid{display:grid;grid-template-columns:1fr 1fr;gap:8mm;margin-top:auto;}
-.label-box{border:2.5px solid #0a3f52;border-radius:5mm;padding:6mm 8mm;text-align:center;}
-.label-box .lb{font-size:13pt;font-weight:700;color:#65787f;text-transform:uppercase;letter-spacing:1.5px;}
-.label-box .lv{font-size:44pt;font-weight:800;color:#0a3f52;margin-top:2mm;}
-.label-footer{display:flex;justify-content:space-between;align-items:flex-end;margin-top:12mm;}
-.label-datetime{font-size:13pt;color:#65787f;font-weight:600;}
-.label-side{position:absolute;top:14mm;right:-3px;bottom:14mm;width:16mm;background:#0a3f52;border-radius:0 4px 4px 0;display:flex;align-items:center;justify-content:center;}
-.label-side span{writing-mode:vertical-rl;transform:rotate(180deg);color:#fff;font-size:15pt;font-weight:700;letter-spacing:3px;}
+.label-box{border:2.5px solid #000;border-radius:5mm;padding:5mm 8mm;text-align:center;}
+.label-box .lb{font-size:12pt;font-weight:700;color:#000;text-transform:uppercase;letter-spacing:1.5px;}
+.label-box .lv{font-size:40pt;font-weight:800;color:#000;margin-top:2mm;}
+.label-footer{display:flex;justify-content:space-between;align-items:flex-end;margin-top:8mm;}
+.label-datetime{font-size:12pt;color:#000;font-weight:600;}
+.label-side{position:absolute;top:10mm;right:-3px;bottom:10mm;width:14mm;background:#000;border-radius:0 4px 4px 0;display:flex;align-items:center;justify-content:center;}
+.label-side span{writing-mode:vertical-rl;transform:rotate(180deg);color:#fff;font-size:14pt;font-weight:700;letter-spacing:3px;}
+.label-logo{height:12mm;margin-bottom:5mm;}
 </style>
 </head>
 <body>
@@ -296,6 +297,21 @@ async function apiSet(key, value){
   }catch(e){ console.error('apiSet error', e); setSyncStatus(false); return false; }
 }
 
+async function apiDelete(key){
+  if(!HAS_BACKEND){ delete memoryStore[key]; return true; }
+  try{
+    const res = await fetchWithTimeout(APPS_SCRIPT_URL, {
+      method:'POST',
+      cache:'no-store',
+      headers: {'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'delete', key})
+    }, 40000);
+    const j = await res.json();
+    setSyncStatus(!!j.ok);
+    return !!j.ok;
+  }catch(e){ console.error('apiDelete error', e); setSyncStatus(false); return false; }
+}
+
 // Guarda varias keys en UNA sola petición atómica (un solo bloqueo en el servidor).
 // Se usa para la BBDD de artículos, para que Vidrio y Embalaje se guarden juntos
 // y nunca queden a medias.
@@ -347,6 +363,16 @@ function parseKV(kv, key, fallback){
   try{ return JSON.parse(kv[key]); }catch(e){ return fallback; }
 }
 
+// Cada packing list se guarda en SU PROPIA key ('pl:<id>'), no todos juntos en un
+// único bloque. Así, si dos tercistas guardan casi a la vez, cada uno solo escribe
+// su propia key y nunca puede pisar por accidente los packing lists de otro usuario.
+function packingListsFromKV(kv){
+  return Object.keys(kv)
+    .filter(k=>k.indexOf('pl:')===0)
+    .map(k=>{ try{ return JSON.parse(kv[k]); }catch(e){ return null; } })
+    .filter(Boolean);
+}
+
 async function loadAll(){
   let kv = HAS_BACKEND ? await apiGetAll() : null;
   if(!kv) kv = memoryStore;
@@ -354,8 +380,18 @@ async function loadAll(){
   DB.users = parseKV(kv,'users',null) || defaultUsers();
   DB.vidrio = parseKV(kv,'articulos_vidrio',null) || seedVidrio();
   DB.embalaje = parseKV(kv,'articulos_embalaje',null) || seedEmbalaje();
-  DB.packinglists = parseKV(kv,'packinglists',[]);
   DB.counters = parseKV(kv,'counters',{});
+  DB.packinglists = packingListsFromKV(kv);
+
+  // Migración de instalaciones antiguas: si aún existe el bloque único
+  // 'packinglists' de versiones anteriores, se reparte en keys individuales
+  // una sola vez y se borra el bloque viejo.
+  const legacy = parseKV(kv,'packinglists',null);
+  if(legacy && legacy.length && HAS_BACKEND){
+    for(const p of legacy){ await apiSet('pl:'+p.id, p); }
+    DB.packinglists = legacy;
+    await apiDelete('packinglists');
+  }
 
   // Solo sembramos usuarios por defecto si de verdad faltan en el servidor (para
   // poder entrar la primera vez). NUNCA reescribimos la BBDD de artículos aquí:
@@ -367,7 +403,10 @@ async function loadAll(){
 
 function persistUsers(){ return apiSet('users', DB.users); }
 function persistArticulos(){ return apiSetMany({articulos_vidrio: DB.vidrio, articulos_embalaje: DB.embalaje}); }
-function persistPL(){ return apiSet('packinglists', DB.packinglists); }
+// Guarda SOLO el packing list indicado (no la lista entera) — evita que dos
+// usuarios se pisen los cambios el uno al otro.
+function savePL(pl){ return apiSet('pl:'+pl.id, pl); }
+function deletePLRemote(id){ return apiDelete('pl:'+id); }
 function persistCounters(){ return apiSet('counters', DB.counters); }
 
 /* Refresca los datos desde el servidor y vuelve a pintar (para ver lo que añaden otros usuarios) */
@@ -378,8 +417,8 @@ async function refreshFromServer(silent){
   DB.users = parseKV(kv,'users',DB.users);
   DB.vidrio = parseKV(kv,'articulos_vidrio',DB.vidrio);
   DB.embalaje = parseKV(kv,'articulos_embalaje',DB.embalaje);
-  DB.packinglists = parseKV(kv,'packinglists',DB.packinglists);
   DB.counters = parseKV(kv,'counters',DB.counters);
+  DB.packinglists = packingListsFromKV(kv);
   if(document.querySelector('.modal-bg')) return; // no interrumpir si hay un modal abierto
   const activeTag = document.activeElement && document.activeElement.tagName;
   if(activeTag==='INPUT' || activeTag==='TEXTAREA' || activeTag==='SELECT') return; // no interrumpir mientras el usuario está escribiendo
@@ -704,7 +743,7 @@ function buildLabelHtml(item){
   return `
     <div class="label-sheet">
       <div class="label-side"><span>${SESSION.usuario}</span></div>
-      <img src="${LOGO_SRC}" alt="Bormioli Luigi" style="height:20mm;margin-bottom:8mm;">
+      <img src="${LOGO_SRC}" alt="Bormioli Luigi" class="label-logo">
       <div class="label-top">
         <div class="label-code">${item.codigo}</div>
         <div class="label-type">${item.tipo}</div>
@@ -777,17 +816,17 @@ async function confirmSendPL(plId){
   p.enviado = true;
   p.fechaEnvio = Date.now();
   p.historialEstados.push({estado:'SOL. ENVIADA', usuario:SESSION.usuario, fecha:Date.now()});
-  await persistPL();
+  await savePL(p);
 }
 
 function addItemToPL(item, forceNew){
   const pl = getActivePL(forceNew);
   if(!item.otro){
     const existing = pl.items.find(i=>i.tipo===item.tipo && i.codigo===item.codigo && !i.otro);
-    if(existing){ existing.cantidadPallet += item.cantidadPallet; persistPL(); return pl; }
+    if(existing){ existing.cantidadPallet += item.cantidadPallet; savePL(pl); return pl; }
   }
   pl.items.push(item);
-  persistPL();
+  savePL(pl);
   return pl;
 }
 
@@ -889,7 +928,7 @@ function stateButtons(p){
 
 function bindListas(all){
   const btnNuevo=document.getElementById('btnNuevoPL');
-  if(btnNuevo) btnNuevo.onclick=()=>{ getActivePL(true); persistPL(); toast('Nuevo packing list creado.'); render(); };
+  if(btnNuevo) btnNuevo.onclick=()=>{ const pl=getActivePL(true); savePL(pl); toast('Nuevo packing list creado.'); render(); };
 
   document.querySelectorAll('[data-group]').forEach(el=>{ el.addEventListener('toggle',()=>{ openGroup[el.dataset.group]=el.open; }); });
 
@@ -902,7 +941,7 @@ function bindListas(all){
       const [id, estado]=b.dataset.setstate.split('|');
       const p=DB.packinglists.find(x=>x.id===id);
       p.estado=estado; p.historialEstados.push({estado, usuario:SESSION.usuario, fecha:Date.now()});
-      persistPL(); toast('Estado actualizado a '+estado+'.'); render();
+      savePL(p); toast('Estado actualizado a '+estado+'.'); render();
     };
   });
 
@@ -911,7 +950,7 @@ function bindListas(all){
       const [plId,itId]=b.dataset.removeitem.split('|');
       const p=DB.packinglists.find(x=>x.id===plId);
       p.items=p.items.filter(i=>i.id!==itId);
-      persistPL(); render();
+      savePL(p); render();
     };
   });
 
@@ -941,7 +980,7 @@ function bindListas(all){
         body:`Se eliminará definitivamente ${p.numero||'este borrador'} (${p.usuario}). Esta acción no se puede deshacer.`,
         actions:[
           {label:'Cancelar', cls:'btn-outline', dismiss:true},
-          {label:'Eliminar', cls:'btn-danger', onClick:()=>{ DB.packinglists=DB.packinglists.filter(x=>x.id!==id); persistPL(); toast('Packing list eliminado.'); render(); }}
+          {label:'Eliminar', cls:'btn-danger', onClick:()=>{ DB.packinglists=DB.packinglists.filter(x=>x.id!==id); deletePLRemote(id); toast('Packing list eliminado.'); render(); }}
         ]
       });
     };
@@ -1045,7 +1084,7 @@ function openAddToPLModal(plId){
     if(mDescVal && crossTypeMismatch(mTipo, mCodigo.value)){ toast('Este código pertenece al otro tipo de material. Cámbialo antes de añadir.'); return; }
     const p=DB.packinglists.find(x=>x.id===plId);
     p.items.push({id:'it_'+Date.now()+Math.random().toString(36).slice(2,6), tipo:mTipo, codigo:mCodigo.value.trim(), descripcion:mDescVal||'(sin descripción)', piezasPorPallet:piezas, cantidadPallet:pallets, otro:!mDescVal});
-    persistPL(); bg.remove(); render(); toast('Artículo añadido.');
+    savePL(p); bg.remove(); render(); toast('Artículo añadido.');
   };
 }
 
