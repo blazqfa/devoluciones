@@ -629,7 +629,7 @@ function bindTopbar(){
 function tabsForRole(){
   if(SESSION.rol==='capataz') return [['comprobacion','Comprobación']];
   if(SESSION.rol==='admin') return [['nueva','Nueva etiqueta'],['todaslistas','Packing lists'],['comprobacion','Comprobación'],['historial','Histórico'],['config','Configuración']];
-  if(SESSION.rol==='almacen') return [['nueva','Nueva etiqueta'],['mislistas','Mis packing lists'],['todaslistas','Todos los packing lists'],['comprobacion','Comprobación'],['historial','Histórico']];
+  if(SESSION.rol==='almacen') return [['nueva','Nueva etiqueta'],['mislistas','Mis packing lists'],['historial','Histórico']];
   return [['nueva','Nueva etiqueta'],['mislistas','Mis packing lists'],['historial','Histórico']];
 }
 function renderTabs(){
@@ -794,7 +794,9 @@ function bindNuevaEtiqueta(){
     async function autoEnviar(pl, mensaje){
       await confirmSendPL(pl.id, true); // true = salta la revisión del capataz
       toast(mensaje);
-      VIEW='comprobacion';
+      // Admin tiene pestaña "Comprobación" para validarlo ahí mismo; BLalmacén
+      // ya no tiene esa pestaña (solo ve lo suyo), así que va a "Mis packing lists".
+      VIEW = SESSION.rol==='admin' ? 'comprobacion' : 'mislistas';
       render();
     }
 
@@ -1408,7 +1410,7 @@ function renderComprobacion(){
   // comprobado por el capataz (COMPROBADA) para poder darle el visto bueno final
   // (ENTRADA OK) sin tener que salir de esta pantalla.
   const pendientes = DB.packinglists.filter(p=>p.estado==='SOL. ENVIADA' && p.enviado!==false).sort((a,b)=>b.creado-a.creado);
-  const comprobadas = (SESSION.rol==='admin' || SESSION.rol==='almacen')
+  const comprobadas = SESSION.rol==='admin'
     ? DB.packinglists.filter(p=>p.estado==='COMPROBADA' && p.enviado!==false).sort((a,b)=>b.creado-a.creado)
     : [];
 
@@ -1444,7 +1446,7 @@ function bindComprobacion(){ bindListas(true); }
 /* ================= HISTORIAL ================= */
 function renderHistorial(){
   let lists = DB.packinglists.filter(p=>p.estado==='ENTRADA OK').sort((a,b)=>b.creado-a.creado);
-  const isAdmin = SESSION.rol==='admin' || SESSION.rol==='almacen';
+  const isAdmin = SESSION.rol==='admin';
   if(!isAdmin) lists = lists.filter(p=>p.usuario===SESSION.usuario);
 
   let body;
