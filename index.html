@@ -1060,9 +1060,9 @@ async function confirmSendPL(plId, skipCapataz){
   p.fechaEnvio = Date.now();
   if(skipCapataz){
     // Admin/BLalmacén: no necesitan revisión del capataz, pasa directo a
-    // pendiente de validar por Admin (ENTRADA OK).
-    p.estado = 'COMPROBADA';
-    p.historialEstados.push({estado:'COMPROBADA', usuario:SESSION.usuario+' (envío interno, sin capataz)', fecha:Date.now()});
+    // PTE. DE UBICAR (ellos mismos ubican su propio material).
+    p.estado = 'PTE. DE UBICAR';
+    p.historialEstados.push({estado:'PTE. DE UBICAR', usuario:SESSION.usuario+' (envío interno, sin capataz)', fecha:Date.now()});
   } else {
     p.historialEstados.push({estado:'SOL. ENVIADA', usuario:SESSION.usuario, fecha:Date.now()});
   }
@@ -1108,7 +1108,7 @@ function renderListas(all){
   return `
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-      <div><h2>${all?'Todos los packing lists':'Mis packing lists'}</h2><p class="sub">Estados: Borrador → SOL. ENVIADA → COMPROBADA → PTE. DE UBICAR → UBICADO → ENTRADA OK</p></div>
+      <div><h2>${all?'Todos los packing lists':'Mis packing lists'}</h2><p class="sub">Estados: Borrador → SOL. ENVIADA → PTE. DE UBICAR → UBICADO → ENTRADA OK</p></div>
       ${!all ? `<button class="btn btn-secondary btn-sm" id="btnNuevoPL">+ Nuevo packing list</button>`:''}
     </div>
     ${body}
@@ -1157,7 +1157,7 @@ function renderBlock(tipo, items, p, canEdit){
   const showUbic = items.some(i=>i.ubicacionPropuesta || i.ubicacionConfirmada);
   // Antes de proponer ubicación, muestra ya en el detalle si hay stock de ese
   // código para poder agrupar (o si no hay, avisa de que tocará asignación manual).
-  const showSugerencia = p.estado==='COMPROBADA';
+  const showSugerencia = p.estado==='PTE. DE UBICAR';
   return `
   <div class="block-title">${tipo}</div>
   <div class="tbl-wrap"><table>
@@ -1182,23 +1182,17 @@ function renderBlock(tipo, items, p, canEdit){
 function stateButtons(p){
   let btns='';
   if(p.estado==='SOL. ENVIADA' && (SESSION.rol==='capataz'||SESSION.rol==='admin')){
-    btns += `<button class="btn btn-ok btn-sm" data-setstate="${p.id}|COMPROBADA">✔ Marcar COMPROBADA</button>`;
-  }
-  if(p.estado==='COMPROBADA' && (SESSION.rol==='almacen'||SESSION.rol==='admin')){
-    btns += `<button class="btn btn-primary btn-sm" data-ubicar="${p.id}">📍 Proponer ubicaciones</button>`;
+    btns += `<button class="btn btn-ok btn-sm" data-setstate="${p.id}|PTE. DE UBICAR">✔ Marcar COMPROBADA</button>`;
   }
   if(p.estado==='PTE. DE UBICAR' && (SESSION.rol==='almacen'||SESSION.rol==='admin')){
-    btns += `<button class="btn btn-primary btn-sm" data-confirmarubicar="${p.id}">✔ Confirmar ubicaciones</button>`;
+    btns += `<button class="btn btn-primary btn-sm" data-ubicar="${p.id}">📍 Ubicar y confirmar</button>`;
   }
   if(p.estado==='UBICADO' && SESSION.rol==='admin'){
     btns += `<button class="btn btn-secondary btn-sm" data-copysap="${p.id}">📋 Copiar para SAP</button>`;
     btns += `<button class="btn btn-ok btn-sm" data-setstate="${p.id}|ENTRADA OK">✔ Marcar ENTRADA OK</button>`;
   }
-  if(p.estado==='COMPROBADA' && (SESSION.rol==='capataz'||SESSION.rol==='admin')){
+  if(p.estado==='PTE. DE UBICAR' && (SESSION.rol==='capataz'||SESSION.rol==='admin')){
     btns += `<button class="btn btn-warn btn-sm" data-setstate="${p.id}|SOL. ENVIADA">↺ Revertir a SOL. ENVIADA</button>`;
-  }
-  if(p.estado==='PTE. DE UBICAR' && (SESSION.rol==='almacen'||SESSION.rol==='admin')){
-    btns += `<button class="btn btn-warn btn-sm" data-setstate="${p.id}|COMPROBADA">↺ Revertir a COMPROBADA</button>`;
   }
   if(p.estado==='UBICADO' && (SESSION.rol==='almacen'||SESSION.rol==='admin')){
     btns += `<button class="btn btn-warn btn-sm" data-setstate="${p.id}|PTE. DE UBICAR">↺ Revertir a PTE. DE UBICAR</button>`;
@@ -1224,21 +1218,21 @@ function openUbicarModal(plId){
   const bg=document.createElement('div');
   bg.className='modal-bg';
   bg.innerHTML=`<div class="modal" style="max-width:560px;">
-    <h3>📍 Proponer ubicaciones — ${p.numero||''}</h3>
-    <p>Propón dónde colocar cada artículo. Si ya hay stock de ese código en el almacén, se sugiere agrupar ahí.</p>
+    <h3>📍 Ubicar y confirmar — ${p.numero||''}</h3>
+    <p>Indica dónde has dejado cada artículo. Si ya hay stock de ese código en el almacén, se sugiere agrupar ahí.</p>
     <div style="max-height:50vh;overflow-y:auto;">
       ${p.items.map((i,idx)=>{
         const sugerencias = sugerirUbicaciones(i.codigo);
         return `<div style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
           <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;">${escapeHtml(i.codigo)} <span style="color:var(--muted);font-weight:400;">— ${i.cantidadPallet} pallets</span></div>
           ${sugerencias.length ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Ya hay stock en: ${sugerencias.map(s=>`<button type="button" class="btn btn-sm btn-outline" data-usesug="${idx}" data-loc="${escapeHtml(s[0])}" style="margin:2px 4px 2px 0;">${escapeHtml(s[0])} (${s[2]})</button>`).join('')}</div>` : `<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Sin stock previo registrado — indica una ubicación manualmente.</div>`}
-          <input class="ubic-input" data-idx="${idx}" placeholder="Ubicación (ej. A-12-3)" value="${escapeHtml(i.ubicacionPropuesta||'')}" style="width:100%;padding:9px 11px;border:1.5px solid var(--line);border-radius:8px;">
+          <input class="ubic-input" data-idx="${idx}" placeholder="Ubicación (ej. A-12-3)" value="${escapeHtml(i.ubicacionConfirmada||i.ubicacionPropuesta||'')}" style="width:100%;padding:9px 11px;border:1.5px solid var(--line);border-radius:8px;">
         </div>`;
       }).join('')}
     </div>
     <div class="modal-actions">
       <button class="btn btn-outline" id="ubCancel">Cancelar</button>
-      <button class="btn btn-primary" id="ubGuardar">✔ Guardar y pasar a PTE. DE UBICAR</button>
+      <button class="btn btn-primary" id="ubGuardar">✔ Confirmar y pasar a UBICADO</button>
     </div>
   </div>`;
   document.body.appendChild(bg);
@@ -1251,44 +1245,11 @@ function openUbicarModal(plId){
     let faltan=false;
     inputs.forEach(inp=>{ if(!inp.value.trim()) faltan=true; });
     if(faltan){ toast('Indica una ubicación para cada artículo.'); return; }
-    inputs.forEach(inp=>{ p.items[Number(inp.dataset.idx)].ubicacionPropuesta = inp.value.trim(); });
-    p.estado='PTE. DE UBICAR';
-    p.historialEstados.push({estado:'PTE. DE UBICAR', usuario:SESSION.usuario, fecha:Date.now()});
-    await savePL(p);
-    bg.remove();
-    toast('Ubicaciones propuestas. Pendiente de confirmarlas definitivamente.');
-    render();
-  };
-}
-
-function openConfirmarUbicarModal(plId){
-  const p = DB.packinglists.find(x=>x.id===plId);
-  if(!p) return;
-  const bg=document.createElement('div');
-  bg.className='modal-bg';
-  bg.innerHTML=`<div class="modal" style="max-width:560px;">
-    <h3>✔ Confirmar ubicaciones definitivas — ${p.numero||''}</h3>
-    <p>Corrige si la ubicación real donde has dejado el pallet es distinta a la propuesta.</p>
-    <div style="max-height:50vh;overflow-y:auto;">
-      ${p.items.map((i,idx)=>`<div style="border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
-        <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;">${escapeHtml(i.codigo)} <span style="color:var(--muted);font-weight:400;">— ${i.cantidadPallet} pallets</span></div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Propuesta: ${escapeHtml(i.ubicacionPropuesta||'—')}</div>
-        <input class="ubicconf-input" data-idx="${idx}" placeholder="Ubicación definitiva" value="${escapeHtml(i.ubicacionConfirmada||i.ubicacionPropuesta||'')}" style="width:100%;padding:9px 11px;border:1.5px solid var(--line);border-radius:8px;">
-      </div>`).join('')}
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-outline" id="ucCancel">Cancelar</button>
-      <button class="btn btn-primary" id="ucGuardar">✔ Confirmar y pasar a UBICADO</button>
-    </div>
-  </div>`;
-  document.body.appendChild(bg);
-  bg.querySelector('#ucCancel').onclick=()=>bg.remove();
-  bg.querySelector('#ucGuardar').onclick=async ()=>{
-    const inputs = bg.querySelectorAll('.ubicconf-input');
-    let faltan=false;
-    inputs.forEach(inp=>{ if(!inp.value.trim()) faltan=true; });
-    if(faltan){ toast('Indica la ubicación definitiva de cada artículo.'); return; }
-    inputs.forEach(inp=>{ p.items[Number(inp.dataset.idx)].ubicacionConfirmada = inp.value.trim(); });
+    inputs.forEach(inp=>{
+      const idx = Number(inp.dataset.idx);
+      p.items[idx].ubicacionPropuesta = inp.value.trim();
+      p.items[idx].ubicacionConfirmada = inp.value.trim();
+    });
     p.estado='UBICADO';
     p.historialEstados.push({estado:'UBICADO', usuario:SESSION.usuario, fecha:Date.now()});
     await savePL(p);
@@ -1417,10 +1378,6 @@ function bindListas(all){
     b.onclick=(e)=>{ e.stopPropagation(); openUbicarModal(b.dataset.ubicar); };
   });
 
-  document.querySelectorAll('[data-confirmarubicar]').forEach(b=>{
-    b.onclick=(e)=>{ e.stopPropagation(); openConfirmarUbicarModal(b.dataset.confirmarubicar); };
-  });
-
   document.querySelectorAll('[data-copysap]').forEach(b=>{
     b.onclick=(e)=>{ e.stopPropagation(); openCopySapModal(b.dataset.copysap); };
   });
@@ -1435,8 +1392,8 @@ function checkAutoComprobada(p){
   if(p.estado!=='SOL. ENVIADA' || !p.items.length) return false;
   const todoConfirmado = p.items.every(i=>i.confirmado);
   if(todoConfirmado){
-    p.estado='COMPROBADA';
-    p.historialEstados.push({estado:'COMPROBADA', usuario:SESSION.usuario+' (lectura automática)', fecha:Date.now()});
+    p.estado='PTE. DE UBICAR';
+    p.historialEstados.push({estado:'PTE. DE UBICAR', usuario:SESSION.usuario+' (lectura automática)', fecha:Date.now()});
     return true;
   }
   return false;
@@ -1526,7 +1483,7 @@ function openScanModal(plId){
     item.fechaConfirmado = Date.now();
     const autoComprobada = checkAutoComprobada(p);
     savePL(p);
-    toast(`✔ ${item.codigo} confirmado.` + (autoComprobada ? ' Todo leído — packing list marcado COMPROBADA.' : ''));
+    toast(`✔ ${item.codigo} confirmado.` + (autoComprobada ? ' Todo leído — pasa a PTE. DE UBICAR.' : ''));
     playBeep(880, 130, 'sine');
     refresh();
     const feedback2 = bg.querySelector('#scanFeedback');
@@ -1760,10 +1717,9 @@ function renderComprobacion(){
   const rol = SESSION.rol;
   const porEstado = (estado) => DB.packinglists.filter(p=>p.estado===estado && p.enviado!==false).sort((a,b)=>b.creado-a.creado);
 
-  const pendientes  = (rol==='capataz' || rol==='admin') ? porEstado('SOL. ENVIADA') : [];
-  const comprobadas = (rol==='almacen' || rol==='admin') ? porEstado('COMPROBADA') : [];
-  const pteUbicar    = (rol==='almacen' || rol==='admin') ? porEstado('PTE. DE UBICAR') : [];
-  const ubicadas      = (rol==='admin') ? porEstado('UBICADO') : [];
+  const pendientes = (rol==='capataz' || rol==='admin') ? porEstado('SOL. ENVIADA') : [];
+  const pteUbicar   = (rol==='almacen' || rol==='admin') ? porEstado('PTE. DE UBICAR') : [];
+  const ubicadas    = (rol==='admin') ? porEstado('UBICADO') : [];
 
   function groupByUser(lists){
     const byUser={};
@@ -1783,19 +1739,18 @@ function renderComprobacion(){
 
   const subTexto = {
     capataz: 'Revisa cada packing list recibido y márcalo como comprobado.',
-    almacen: 'Propón y confirma la ubicación de almacén para cada artículo comprobado.',
-    admin: 'Supervisa las cuatro fases: comprobación, ubicación propuesta, ubicación confirmada y validación final.'
+    almacen: 'Indica la ubicación de almacén de cada artículo comprobado.',
+    admin: 'Supervisa las tres fases: comprobación, ubicación y validación final.'
   }[rol] || '';
 
-  const vacio = !pendientes.length && !comprobadas.length && !pteUbicar.length && !ubicadas.length;
+  const vacio = !pendientes.length && !pteUbicar.length && !ubicadas.length;
   return `
   <div class="card">
     <h2>Comprobación de llegada de material</h2>
     <p class="sub">${subTexto}</p>
     ${vacio ? `<div class="empty-state"><div class="big">✅</div>No hay packing lists pendientes.</div>` : `
       ${pendientes.length ? `<div class="block-title">Pendientes de comprobar</div>${renderGroup(pendientes,'C')}` : ''}
-      ${comprobadas.length ? `<div class="block-title">Comprobadas · pendientes de proponer ubicación</div>${renderGroup(comprobadas,'V')}` : ''}
-      ${pteUbicar.length ? `<div class="block-title">Pendientes de confirmar ubicación definitiva</div>${renderGroup(pteUbicar,'U')}` : ''}
+      ${pteUbicar.length ? `<div class="block-title">Comprobadas · pendientes de ubicar</div>${renderGroup(pteUbicar,'U')}` : ''}
       ${ubicadas.length ? `<div class="block-title">Ubicadas · pendientes de validar (ENTRADA OK)</div>${renderGroup(ubicadas,'E')}` : ''}
     `}
   </div>`;
