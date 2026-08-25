@@ -792,7 +792,7 @@ function bindNuevaEtiqueta(){
     const esInterno = SESSION.rol==='almacen' || SESSION.rol==='admin';
 
     async function autoEnviar(pl, mensaje){
-      await confirmSendPL(pl.id);
+      await confirmSendPL(pl.id, true); // true = salta la revisión del capataz
       toast(mensaje);
       VIEW='comprobacion';
       render();
@@ -803,7 +803,7 @@ function bindNuevaEtiqueta(){
         if(esInterno){
           const pl = addItemToPL(item);
           formState={tipo:'EMBALAJE',codigo:'',descripcion:'',piezas:'',pallets:'',otro:false};
-          await autoEnviar(pl, 'Etiqueta impresa y enviada a Comprobación.');
+          await autoEnviar(pl, 'Etiqueta impresa. Pendiente de validar (ENTRADA OK).');
         } else {
           showModal({
             title:'¿Agregar al packing list?',
@@ -819,7 +819,7 @@ function bindNuevaEtiqueta(){
       const pl = addItemToPL(item);
       formState={tipo:'VIDRIO',codigo:'',descripcion:'',piezas:'',pallets:'',otro:false};
       if(esInterno){
-        await autoEnviar(pl, 'Añadido y enviado a Comprobación.');
+        await autoEnviar(pl, 'Añadido. Pendiente de validar (ENTRADA OK).');
       } else {
         toast('Añadido al packing list.');
         renderContent();
@@ -917,14 +917,21 @@ function getActivePL(forceNew){
   return pl;
 }
 
-async function confirmSendPL(plId){
+async function confirmSendPL(plId, skipCapataz){
   const p = DB.packinglists.find(x=>x.id===plId);
   if(!p) return;
   const letra = (DB.users.find(u=>u.usuario===p.usuario)||{}).letra || 'X';
   if(!p.numero) p.numero = await apiNextNumero(letra);
   p.enviado = true;
   p.fechaEnvio = Date.now();
-  p.historialEstados.push({estado:'SOL. ENVIADA', usuario:SESSION.usuario, fecha:Date.now()});
+  if(skipCapataz){
+    // Admin/BLalmacén: no necesitan revisión del capataz, pasa directo a
+    // pendiente de validar por Admin (ENTRADA OK).
+    p.estado = 'COMPROBADA';
+    p.historialEstados.push({estado:'COMPROBADA', usuario:SESSION.usuario+' (envío interno, sin capataz)', fecha:Date.now()});
+  } else {
+    p.historialEstados.push({estado:'SOL. ENVIADA', usuario:SESSION.usuario, fecha:Date.now()});
+  }
   await savePL(p);
 }
 
@@ -980,11 +987,15 @@ function renderPLCard(p){
   const stLabel = isDraft ? 'BORRADOR' : p.estado;
   const canEdit = (p.estado!=='ENTRADA OK') && (SESSION.rol==='admin' || p.usuario===SESSION.usuario);
   const canDelete = SESSION.rol==='admin';
+  const canScan = !isDraft && p.estado!=='ENTRADA OK' && (SESSION.rol==='capataz'||SESSION.rol==='admin');
   return `
   <div class="pl-card">
     <div class="pl-head" data-pl="${p.id}">
       <div><div class="pl-num">${p.numero || 'Borrador (sin enviar)'}</div><div class="pl-meta">${p.usuario} · ${fmtDateTime(new Date(p.creado))} · ${totalPallets} pallets</div></div>
-      <span class="status-pill ${stCls}">${stLabel}</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${canScan ? `<button class="btn btn-secondary btn-sm" data-scan="${p.id}">📷 Modo lectura</button>` : ''}
+        <span class="status-pill ${stCls}">${stLabel}</span>
+      </div>
     </div>
     <div class="pl-body ${openPL[p.id]?'open':''}" id="body_${p.id}">
       ${renderBlock('VIDRIO', vidrio, p, canEdit)}
@@ -993,7 +1004,6 @@ function renderPLCard(p){
       <div class="pl-actions">
         ${isDraft && canEdit ? `<button class="btn btn-primary btn-sm" data-preview="${p.id}">👁 Vista previa y enviar</button>` : ''}
         ${!isDraft ? stateButtons(p) : ''}
-        ${!isDraft && p.estado!=='ENTRADA OK' && (SESSION.rol==='capataz'||SESSION.rol==='admin') ? `<button class="btn btn-secondary btn-sm" data-scan="${p.id}">📷 Modo lectura</button>` : ''}
         ${canEdit ? `<button class="btn btn-outline btn-sm" data-addto="${p.id}">+ Añadir artículo</button>`:''}
         <button class="btn btn-outline btn-sm" data-printpl="${p.id}">🖨️ Imprimir packing list</button>
         ${canDelete ? `<button class="btn btn-danger btn-sm" data-deletepl="${p.id}">🗑 Eliminar</button>`:''}
