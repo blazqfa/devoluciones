@@ -415,6 +415,45 @@ async function apiNextNumero(letra){
   return `${letra}-${year}-${String(Date.now()).slice(-4)}`;
 }
 
+// --- Autenticación: las contraseñas SOLO se comprueban en el servidor.
+// El navegador nunca descarga la lista de contraseñas de los demás usuarios. ---
+async function apiPost(action, extra){
+  const res = await fetchWithTimeout(APPS_SCRIPT_URL, {
+    method:'POST', cache:'no-store',
+    headers: {'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify(Object.assign({action}, extra))
+  }, 15000);
+  return res.json();
+}
+async function apiLogin(usuario, password){
+  if(!HAS_BACKEND){
+    const u = (DB.users && DB.users.length ? DB.users : defaultUsers())
+      .find(x=>x.usuario.toLowerCase()===usuario.trim().toLowerCase() && x.password===password && x.activo!==false);
+    return u ? {ok:true, user:{usuario:u.usuario, rol:u.rol, letra:u.letra, activo:u.activo}} : {ok:false};
+  }
+  try{ return await apiPost('login', {usuario, password}); }
+  catch(e){ console.error('apiLogin error', e); return {ok:false, error:'network'}; }
+}
+async function apiSetPassword(usuario, newPassword){
+  if(!HAS_BACKEND) return true;
+  try{ const j=await apiPost('setPassword', {usuario, newPassword}); return !!j.ok; }
+  catch(e){ console.error('apiSetPassword error', e); return false; }
+}
+async function apiAddUser(user){
+  if(!HAS_BACKEND) return true;
+  try{ const j=await apiPost('addUser', {user}); return j; }
+  catch(e){ console.error('apiAddUser error', e); return {ok:false}; }
+}
+async function apiUpdateUserMeta(usuario, patch){
+  if(!HAS_BACKEND) return true;
+  try{ const j=await apiPost('updateUserMeta', Object.assign({usuario}, patch)); return !!j.ok; }
+  catch(e){ console.error('apiUpdateUserMeta error', e); return false; }
+}
+async function apiSeedUsersIfMissing(users){
+  if(!HAS_BACKEND) return;
+  try{ await apiPost('seedUsers', {users}); }catch(e){ console.error('apiSeedUsersIfMissing error', e); }
+}
+
 function parseKV(kv, key, fallback){
   if(!kv || kv[key]===undefined || kv[key]===null || kv[key]==='') return fallback;
   try{ return JSON.parse(kv[key]); }catch(e){ return fallback; }
@@ -434,7 +473,10 @@ async function loadAll(){
   let kv = HAS_BACKEND ? await apiGetAll() : null;
   if(!kv) kv = memoryStore;
 
-  DB.users = parseKV(kv,'users',null) || defaultUsers();
+  // DB.users NUNCA contiene contraseñas cuando hay backend: el servidor ya
+  // las quita antes de responder (ver Code.gs, acción getAll). El login real
+  // se valida aparte con apiLogin(), que consulta al servidor.
+  DB.users = parseKV(kv,'users',null) || (HAS_BACKEND ? [] : defaultUsers());
   DB.vidrio = parseKV(kv,'articulos_vidrio',null) || seedVidrio();
   DB.embalaje = parseKV(kv,'articulos_embalaje',null) || seedEmbalaje();
   DB.counters = parseKV(kv,'counters',{});
@@ -452,17 +494,24 @@ async function loadAll(){
     await apiDelete('packinglists');
   }
 
-  // Solo sembramos usuarios por defecto si de verdad faltan en el servidor (para
-  // poder entrar la primera vez). NUNCA reescribimos la BBDD de artículos aquí:
-  // si el servidor no respondiera bien un GET puntual, esto podría sobreescribir
-  // un catálogo real con los artículos de ejemplo — así que la BBDD solo se
-  // guarda cuando el usuario la importa o edita explícitamente.
-  if(!kv['users']) await apiSet('users', DB.users);
+  // Primer arranque: si el servidor todavía no tiene usuarios, los crea con
+  // una acción dedicada que solo escribe si la key está vacía (nunca
+  // sobreescribe usuarios reales). NUNCA reescribimos la BBDD de artículos
+  // aquí: si el servidor no respondiera bien un GET puntual, esto podría
+  // sobreescribir un catálogo real con los artículos de ejemplo — así que la
+  // BBDD solo se guarda cuando el usuario la importa o edita explícitamente.
+  if(!kv['users']){
+    await apiSeedUsersIfMissing(defaultUsers());
+    const kv2 = await apiGetAll();
+    if(kv2) DB.users = parseKV(kv2,'users',null) || DB.users;
+  }
   if(!kv['empresas']) await apiSet('empresas', DB.empresas);
   if(!kv['choferes']) await apiSet('choferes', DB.choferes);
 }
 
-function persistUsers(){ return apiSet('users', DB.users); }
+// NOTA: ya no existe persistUsers() genérico — los usuarios se gestionan con
+// acciones dedicadas (login/setPassword/addUser/updateUserMeta) para que las
+// contraseñas de unos usuarios nunca pasen por el navegador de otro.
 function persistArticulos(){ return apiSetMany({articulos_vidrio: DB.vidrio, articulos_embalaje: DB.embalaje}); }
 // Guarda SOLO el packing list indicado (no la lista entera) — evita que dos
 // usuarios se pisen los cambios el uno al otro.
@@ -489,6 +538,15 @@ async function refreshFromServer(silent){
   if(activeTag==='INPUT' || activeTag==='TEXTAREA' || activeTag==='SELECT') return; // no interrumpir mientras el usuario está escribiendo
   if(SESSION) render();
   if(!silent) toast('Datos actualizados.');
+}
+
+// Escapa HTML para evitar que texto libre introducido por cualquier usuario
+// (descripciones, direcciones, nombres de chófer, código "OTRO", etc.) se
+// interprete como HTML/JS al mostrarlo en la pantalla de otro usuario.
+function escapeHtml(str){
+  return String(str==null?'':str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function toast(msg){
@@ -521,10 +579,8 @@ function showModal({title, body, actions}){
 }
 
 /* ---------------- Auth ---------------- */
-function doLogin(usuario, password){
-  const u = DB.users.find(x=>x.usuario.toLowerCase()===usuario.trim().toLowerCase() && x.activo!==false);
-  if(!u || u.password!==password) return null;
-  return u;
+async function doLogin(usuario, password){
+  return await apiLogin(usuario, password);
 }
 
 /* ---------------- Article lookup ---------------- */
@@ -596,8 +652,11 @@ function bindLogin(){
       btn.disabled=false; btn.textContent=prevText;
     }
     const u=document.getElementById('inUser').value, p=document.getElementById('inPass').value;
-    const found=doLogin(u,p);
-    if(found){ SESSION=found; VIEW = found.rol==='capataz'?'comprobacion':'nueva'; render(); }
+    if(!u.trim() || !p){ document.getElementById('loginError').innerHTML=`<div class="error-msg">Introduce usuario y contraseña.</div>`; return; }
+    btn.disabled=true; const prevText2=btn.textContent; btn.textContent='Comprobando…';
+    const result = await doLogin(u,p);
+    btn.disabled=false; btn.textContent=prevText2;
+    if(result && result.ok){ SESSION=result.user; VIEW = result.user.rol==='capataz'?'comprobacion':'nueva'; render(); }
     else document.getElementById('loginError').innerHTML=`<div class="error-msg">Usuario o contraseña incorrectos.</div>`;
   };
   document.getElementById('btnLogin').onclick=doIt;
@@ -685,8 +744,8 @@ function renderNuevaEtiqueta(){
     <div class="field">
       <label>Descripción</label>
       ${formState.otro
-        ? `<input id="fDescManual" placeholder="Escribe la descripción manualmente" value="${formState.descripcion}">`
-        : `<div class="desc-preview">${formState.descripcion || 'Se autocompletará al elegir el código…'}</div>`}
+        ? `<input id="fDescManual" placeholder="Escribe la descripción manualmente" value="${escapeHtml(formState.descripcion)}">`
+        : `<div class="desc-preview">${escapeHtml(formState.descripcion) || 'Se autocompletará al elegir el código…'}</div>`}
     </div>
 
     <div class="grid2">
@@ -736,7 +795,7 @@ function bindNuevaEtiqueta(){
       const acList=document.getElementById('acList');
       if(!e.target.value.trim()){ acList.innerHTML=''; document.getElementById('mismatchWarning').innerHTML=''; return; }
       acList.innerHTML = `<div class="ac-list">${
-        results.length ? results.map(r=>`<div class="ac-item" data-code="${r[0]}" data-desc="${(r[1]||'').replace(/"/g,'&quot;')}"><b>${r[0]}</b><span>${r[1]||''}</span></div>`).join('')
+        results.length ? results.map(r=>`<div class="ac-item" data-code="${escapeHtml(r[0])}" data-desc="${(r[1]||'').replace(/"/g,'&quot;')}"><b>${escapeHtml(r[0])}</b><span>${escapeHtml(r[1]||'')}</span></div>`).join('')
         : `<div class="ac-empty">Sin coincidencias en la base de datos.</div>`
       }</div>`;
       acList.querySelectorAll('.ac-item').forEach(item=>{
@@ -847,8 +906,8 @@ function buildLabelHtml(item){
       </div>
       <div class="label-right">
         <div class="label-type">${item.tipo}</div>
-        <div class="label-code">${item.codigo}</div>
-        <div class="label-desc">${item.descripcion}</div>
+        <div class="label-code">${escapeHtml(item.codigo)}</div>
+        <div class="label-desc">${escapeHtml(item.descripcion)}</div>
         <div class="label-grid">
           <div class="label-box"><div class="lb">Cantidad de pallets</div><div class="lv">${item.cantidadPallet}</div></div>
           <div class="label-box"><div class="lb">Piezas por pallet</div><div class="lv">${item.piezasPorPallet||'-'}</div></div>
@@ -881,8 +940,8 @@ function printLabel(item, onClose){
     <h3>Vista previa de la etiqueta</h3>
     <div style="border:1.5px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;background:#fbfcfd;">
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700;">${item.tipo}</div>
-      <div style="font-size:24px;font-weight:800;color:var(--brand-dark);line-height:1.15;word-break:break-word;">${item.codigo}</div>
-      <div style="font-size:14.5px;margin:8px 0 12px;color:var(--ink);">${item.descripcion}</div>
+      <div style="font-size:24px;font-weight:800;color:var(--brand-dark);line-height:1.15;word-break:break-word;">${escapeHtml(item.codigo)}</div>
+      <div style="font-size:14.5px;margin:8px 0 12px;color:var(--ink);">${escapeHtml(item.descripcion)}</div>
       <div style="display:flex;gap:18px;font-size:13.5px;">
         <div><b>${item.cantidadPallet}</b> pallets</div>
         <div><b>${item.piezasPorPallet||'-'}</b> piezas/pallet</div>
@@ -1024,8 +1083,8 @@ function renderBlock(tipo, items, p, canEdit){
     <tr>${showConfirm?'<th></th>':''}<th>Código</th><th>Descripción</th><th>Pallets</th><th>Pzs/pallet</th>${canEdit?'<th></th>':''}</tr>
     ${items.map(i=>`<tr class="${i.confirmado?'row-confirmado':''}">
       ${showConfirm?`<td>${i.confirmado?'<span title="Confirmado por lectura" style="color:var(--ok);font-weight:700;">✔</span>':'<span title="Pendiente de leer" style="color:var(--muted);">○</span>'}</td>`:''}
-      <td>${i.codigo}${i.otro?'<span class="tag-otro">OTRO</span>':''}</td>
-      <td>${i.descripcion}</td>
+      <td>${escapeHtml(i.codigo)}${i.otro?'<span class="tag-otro">OTRO</span>':''}</td>
+      <td>${escapeHtml(i.descripcion)}</td>
       <td>${i.cantidadPallet}</td>
       <td>${i.piezasPorPallet||'-'}</td>
       ${canEdit?`<td style="white-space:nowrap;">
@@ -1154,7 +1213,7 @@ function openScanModal(plId){
       <input id="scanInput" placeholder="Aquí debe estar el foco al escanear…" autocomplete="off" style="width:100%;padding:12px 14px;border:2px solid var(--brand);border-radius:10px;font-size:15px;">
       <div id="scanList" style="max-height:260px;overflow-y:auto;margin-top:12px;">
         ${p.items.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid var(--line);font-size:13.5px;">
-          <span>${i.confirmado?'✔':'○'} ${i.codigo} <span style="color:var(--muted);">(${i.cantidadPallet} pallets)</span></span>
+          <span>${i.confirmado?'✔':'○'} ${escapeHtml(i.codigo)} <span style="color:var(--muted);">(${i.cantidadPallet} pallets)</span></span>
         </div>`).join('')}
       </div>
       <div class="modal-actions"><button class="btn btn-outline" id="scanClose">Cerrar</button></div>
@@ -1240,7 +1299,7 @@ function buildPackingListDocHtml(p, empresaOrigen, chofer, matVeh, matRem){
     <div class="pldoc-block-title">${tipo}</div>
     <table class="pldoc-table">
       <tr><th>Código</th><th>Descripción</th><th>Pallets</th><th>Pzs/pallet</th></tr>
-      ${items.map(i=>`<tr><td>${i.codigo}</td><td>${i.descripcion}</td><td>${i.cantidadPallet}</td><td>${i.piezasPorPallet||'-'}</td></tr>`).join('')}
+      ${items.map(i=>`<tr><td>${escapeHtml(i.codigo)}</td><td>${escapeHtml(i.descripcion)}</td><td>${i.cantidadPallet}</td><td>${i.piezasPorPallet||'-'}</td></tr>`).join('')}
     </table>
     <div class="pldoc-total">Subtotal ${tipo.toLowerCase()}: ${subtotal} pallets</div>`;
 
@@ -1261,7 +1320,7 @@ function buildPackingListDocHtml(p, empresaOrigen, chofer, matVeh, matRem){
       </div>
       <div class="pldoc-box">
         <b>Origen (tercista)</b>
-        ${empresaOrigen ? `${empresaOrigen.nombre}<br>${empresaOrigen.direccion}` : (p.usuario || '—')}
+        ${empresaOrigen ? `${escapeHtml(empresaOrigen.nombre)}<br>${escapeHtml(empresaOrigen.direccion)}` : escapeHtml(p.usuario || '—')}
       </div>
     </div>
 
@@ -1380,7 +1439,7 @@ function openAddToPLModal(plId){
   const mCodigo=bg.querySelector('#mCodigo');
   mCodigo.oninput=()=>{
     const res=searchArticulos(mTipo, mCodigo.value);
-    bg.querySelector('#mAcList').innerHTML = res.length? `<div class="ac-list">${res.map(r=>`<div class="ac-item" data-c="${r[0]}" data-d="${(r[1]||'').replace(/"/g,'&quot;')}"><b>${r[0]}</b><span>${r[1]||''}</span></div>`).join('')}</div>` : '';
+    bg.querySelector('#mAcList').innerHTML = res.length? `<div class="ac-list">${res.map(r=>`<div class="ac-item" data-c="${escapeHtml(r[0])}" data-d="${(r[1]||'').replace(/"/g,'&quot;')}"><b>${escapeHtml(r[0])}</b><span>${escapeHtml(r[1]||'')}</span></div>`).join('')}</div>` : '';
     bg.querySelectorAll('.ac-item').forEach(it=>{
       it.onclick=()=>{ mCodigo.value=it.dataset.c; mDescVal=it.dataset.d; bg.querySelector('#mDesc').textContent=mDescVal; bg.querySelector('#mAcList').innerHTML=''; checkMismatch(); };
     });
@@ -1488,20 +1547,24 @@ function renderConfig(){
 function renderCfgUsuarios(){
   return `
   <div class="tbl-wrap"><table>
-    <tr><th>Usuario</th><th>Contraseña</th><th>Rol</th><th>Letra PL</th><th>Estado</th><th></th></tr>
+    <tr><th>Usuario</th><th>Nueva contraseña</th><th>Rol</th><th>Letra PL</th><th>Estado</th><th></th></tr>
     ${DB.users.map((u,idx)=>`<tr>
-      <td>${u.usuario}</td>
-      <td><input class="search-box" style="margin:0;padding:6px 9px;font-size:13px;" data-passidx="${idx}" value="${u.password}"></td>
+      <td>${escapeHtml(u.usuario)}</td>
+      <td style="white-space:nowrap;">
+        <input class="search-box" style="margin:0;padding:6px 9px;font-size:13px;width:120px;display:inline-block;" data-newpassidx="${idx}" placeholder="•••••• (dejar vacío = no cambiar)">
+        <button class="btn btn-sm btn-outline" data-savepassidx="${idx}">Cambiar</button>
+      </td>
       <td>
         <select data-rolidx="${idx}" style="padding:6px 8px;border-radius:8px;border:1.5px solid var(--line);">
           ${['operario','almacen','capataz','admin'].map(r=>`<option value="${r}" ${u.rol===r?'selected':''}>${rolLabel(r)}</option>`).join('')}
         </select>
       </td>
-      <td><input data-letraidx="${idx}" value="${u.letra}" style="width:40px;padding:6px;text-align:center;border-radius:8px;border:1.5px solid var(--line);"></td>
+      <td><input data-letraidx="${idx}" value="${escapeHtml(u.letra)}" style="width:40px;padding:6px;text-align:center;border-radius:8px;border:1.5px solid var(--line);"></td>
       <td>${u.activo!==false?'<span class="status-pill st-ok">Activo</span>':'<span class="status-pill st-enviada">Inactivo</span>'}</td>
       <td><button class="btn btn-sm ${u.activo!==false?'btn-danger':'btn-ok'}" data-toggleactive="${idx}">${u.activo!==false?'Desactivar':'Activar'}</button></td>
     </tr>`).join('')}
   </table></div>
+  <p class="sub">Por seguridad, las contraseñas actuales no se muestran ni se descargan al navegador. Escribe una nueva y pulsa "Cambiar" para actualizarla.</p>
 
   <h3 style="margin-top:22px;font-size:15px;">Añadir nuevo usuario / perfil de tercista</h3>
   <div class="grid3">
@@ -1539,7 +1602,7 @@ function renderCfgBBDD(){
   <table id="bbddTable">
     <tr><th>Código</th><th>Descripción</th><th>Pzs/pallet</th><th></th></tr>
     ${list.slice(0,200).map((r,idx)=>`<tr>
-      <td><input data-code="${idx}" value="${r[0]}" style="width:120px;padding:5px;border-radius:6px;border:1px solid var(--line);"></td>
+      <td><input data-code="${idx}" value="${String(r[0]).replace(/"/g,'&quot;')}" style="width:120px;padding:5px;border-radius:6px;border:1px solid var(--line);"></td>
       <td><input data-desc="${idx}" value="${(r[1]||'').replace(/"/g,'&quot;')}" style="width:100%;padding:5px;border-radius:6px;border:1px solid var(--line);"></td>
       <td><input data-pz="${idx}" type="number" value="${r[2]||0}" style="width:80px;padding:5px;border-radius:6px;border:1px solid var(--line);"></td>
       <td><button class="btn btn-sm btn-danger" data-delrow="${idx}">✕</button></td>
@@ -1631,19 +1694,35 @@ function bindCfgChoferes(){
   };
 }
 function bindCfgUsuarios(){
-  document.querySelectorAll('[data-passidx]').forEach(inp=>{ inp.onchange=()=>{ DB.users[inp.dataset.passidx].password=inp.value; persistUsers(); toast('Contraseña actualizada.'); }; });
-  document.querySelectorAll('[data-rolidx]').forEach(sel=>{ sel.onchange=()=>{ DB.users[sel.dataset.rolidx].rol=sel.value; persistUsers(); toast('Rol actualizado.'); }; });
-  document.querySelectorAll('[data-letraidx]').forEach(inp=>{ inp.onchange=()=>{ DB.users[inp.dataset.letraidx].letra=inp.value.toUpperCase().slice(0,1); persistUsers(); }; });
-  document.querySelectorAll('[data-toggleactive]').forEach(b=>{ b.onclick=()=>{ const u=DB.users[b.dataset.toggleactive]; u.activo = u.activo===false; persistUsers(); renderContent(); }; });
-  document.getElementById('btnAddUser').onclick=()=>{
+  document.querySelectorAll('[data-savepassidx]').forEach(b=>{
+    b.onclick=async ()=>{
+      const idx=b.dataset.savepassidx;
+      const input=document.querySelector(`[data-newpassidx="${idx}"]`);
+      const val=input.value.trim();
+      if(!val){ toast('Escribe la nueva contraseña primero.'); return; }
+      b.disabled=true; b.textContent='Guardando…';
+      const ok = await apiSetPassword(DB.users[idx].usuario, val);
+      b.disabled=false; b.textContent='Cambiar';
+      if(ok){ input.value=''; toast('Contraseña actualizada.'); } else { toast('No se pudo actualizar la contraseña.'); }
+    };
+  });
+  document.querySelectorAll('[data-rolidx]').forEach(sel=>{ sel.onchange=async ()=>{ DB.users[sel.dataset.rolidx].rol=sel.value; await apiUpdateUserMeta(DB.users[sel.dataset.rolidx].usuario,{rol:sel.value}); toast('Rol actualizado.'); }; });
+  document.querySelectorAll('[data-letraidx]').forEach(inp=>{ inp.onchange=async ()=>{ const letra=inp.value.toUpperCase().slice(0,1); DB.users[inp.dataset.letraidx].letra=letra; await apiUpdateUserMeta(DB.users[inp.dataset.letraidx].usuario,{letra}); }; });
+  document.querySelectorAll('[data-toggleactive]').forEach(b=>{ b.onclick=async ()=>{ const u=DB.users[b.dataset.toggleactive]; u.activo = u.activo===false; await apiUpdateUserMeta(u.usuario,{activo:u.activo}); renderContent(); }; });
+  document.getElementById('btnAddUser').onclick=async ()=>{
     const usuario=document.getElementById('newUsuario').value.trim();
     const password=document.getElementById('newPass').value.trim();
     const rol=document.getElementById('newRol').value;
     const letra=(document.getElementById('newLetra').value||'X').toUpperCase().slice(0,1);
     if(!usuario||!password){ toast('Completa usuario y contraseña.'); return; }
     if(DB.users.some(u=>u.usuario.toLowerCase()===usuario.toLowerCase())){ toast('Ese usuario ya existe.'); return; }
-    DB.users.push({usuario,password,rol,letra,activo:true});
-    persistUsers(); toast('Usuario añadido.'); renderContent();
+    const result = await apiAddUser({usuario,password,rol,letra,activo:true});
+    if(result===true || (result && result.ok)){
+      DB.users.push({usuario,rol,letra,activo:true}); // sin password en memoria del cliente
+      toast('Usuario añadido.'); renderContent();
+    } else {
+      toast((result && result.error) || 'No se pudo añadir el usuario.');
+    }
   };
 }
 function bindCfgBBDD(){
