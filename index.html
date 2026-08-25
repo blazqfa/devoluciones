@@ -1348,23 +1348,22 @@ function buildPackingListDocHtml(p, empresaOrigen, chofer, matVeh, matRem){
 function openPrintPLModal(plId){
   const p = DB.packinglists.find(x=>x.id===plId);
   if(!p) return;
-  // Intenta preseleccionar la empresa de origen buscando coincidencia con el usuario
-  const matchIdx = DB.empresas.findIndex(e=>e.nombre.toUpperCase()===String(p.usuario).toUpperCase());
+  // La empresa de origen NO se elige: siempre es la que corresponde al
+  // tercista dueño del packing list. Así Trigo solo puede imprimir con
+  // TRIGO, Stylepack con STYLEPACK, etc. — nunca con la de otro.
+  const empresa = DB.empresas.find(e=>e.nombre.toUpperCase()===String(p.usuario).toUpperCase()) || null;
   const bg=document.createElement('div');
   bg.className='modal-bg';
   bg.innerHTML=`<div class="modal" style="max-width:460px;">
     <h3>Imprimir packing list</h3>
-    <p>Selecciona la empresa de origen y el chófer antes de imprimir.</p>
+    <p>Empresa de origen y chófer para este envío.</p>
     <div class="field"><label>Empresa de origen</label>
-      <select id="ppEmpresa" style="width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;">
-        <option value="-1">— Sin empresa (usar solo el usuario) —</option>
-        ${DB.empresas.map((e,idx)=>`<option value="${idx}" ${idx===matchIdx?'selected':''}>${e.nombre}</option>`).join('')}
-      </select>
+      <div class="desc-preview">${empresa ? `${escapeHtml(empresa.nombre)} — ${escapeHtml(empresa.direccion)}` : `${escapeHtml(p.usuario)} (sin dirección registrada — pide a Admin que la añada en Configuración → Empresas)`}</div>
     </div>
     <div class="field"><label>Chófer</label>
       <select id="ppChofer" style="width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;">
         <option value="-1">— Introducir manualmente —</option>
-        ${DB.choferes.map((c,idx)=>`<option value="${idx}">${c.nombre}</option>`).join('')}
+        ${DB.choferes.map((c,idx)=>`<option value="${idx}">${escapeHtml(c.nombre)}</option>`).join('')}
       </select>
     </div>
     <div class="grid2">
@@ -1384,9 +1383,7 @@ function openPrintPLModal(plId){
   };
   bg.querySelector('#ppCancel').onclick=()=>bg.remove();
   bg.querySelector('#ppPrint').onclick=()=>{
-    const empIdx = Number(bg.querySelector('#ppEmpresa').value);
     const choIdx = Number(bg.querySelector('#ppChofer').value);
-    const empresa = empIdx>=0 ? DB.empresas[empIdx] : null;
     const choferNombre = choIdx>=0 ? DB.choferes[choIdx].nombre : '';
     const matVeh = bg.querySelector('#ppMatVeh').value.trim();
     const matRem = bg.querySelector('#ppMatRem').value.trim();
