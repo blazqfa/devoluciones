@@ -941,12 +941,12 @@ function buildLabelHtml(item, uid){
       <div class="label-right">
         <div class="label-type">${item.tipo}</div>
         <div class="label-code">${escapeHtml(item.codigo)}</div>
+        <div class="label-barcode"><svg id="printBarcode_${uid}"></svg></div>
         <div class="label-desc">${escapeHtml(item.descripcion)}</div>
         <div class="label-grid">
           <div class="label-box"><div class="lb">Cantidad de pallets</div><div class="lv">${item.cantidadPallet}</div></div>
           <div class="label-box"><div class="lb">Piezas por pallet</div><div class="lv">${item.piezasPorPallet||'-'}</div></div>
         </div>
-        <div class="label-barcode"><svg id="printBarcode_${uid}"></svg></div>
         <div class="label-bottom-row">
           <div class="label-qr" id="printQr_${uid}"></div>
           <div class="label-datetime"><b>Impreso: ${fmtDateTime(now)}</b>Escanea el QR para confirmar la entrada</div>
@@ -1118,6 +1118,7 @@ function renderPLCard(p){
       ${renderBlock('VIDRIO', vidrio, p, canEdit)}
       ${renderBlock('EMBALAJE', emb, p, canEdit)}
       <div class="total-row"><span>TOTAL GENERAL</span><span>${totalPallets} pallets</span></div>
+      ${p.copiadoSap ? `<p class="sub" style="margin:4px 0 0;">📋 Copiado para SAP por ${escapeHtml(p.copiadoSap.usuario)} el ${fmtDateTime(new Date(p.copiadoSap.fecha))}</p>` : ''}
       <div class="pl-actions">
         ${isDraft && canEdit ? `<button class="btn btn-primary btn-sm" data-preview="${p.id}">👁 Vista previa y enviar</button>` : ''}
         ${!isDraft ? stateButtons(p) : ''}
@@ -1166,6 +1167,7 @@ function stateButtons(p){
     btns += `<button class="btn btn-primary btn-sm" data-confirmarubicar="${p.id}">✔ Confirmar ubicaciones</button>`;
   }
   if(p.estado==='UBICADO' && SESSION.rol==='admin'){
+    btns += `<button class="btn btn-secondary btn-sm" data-copysap="${p.id}">📋 Copiar para SAP</button>`;
     btns += `<button class="btn btn-ok btn-sm" data-setstate="${p.id}|ENTRADA OK">✔ Marcar ENTRADA OK</button>`;
   }
   if(p.estado==='COMPROBADA' && (SESSION.rol==='capataz'||SESSION.rol==='admin')){
@@ -1272,6 +1274,49 @@ function openConfirmarUbicarModal(plId){
   };
 }
 
+// Genera el texto de ubicaciones listo para pegar en SAP (código, ubicación,
+// pallets y piezas por línea, separados por tabulador) y lo deja registrado
+// en el propio packing list (quién y cuándo lo copió), como constancia.
+function buildSapText(p){
+  const lineas = p.items.map(i =>
+    [i.codigo, i.ubicacionConfirmada||i.ubicacionPropuesta||'(sin ubicación)', i.cantidadPallet, i.piezasPorPallet||''].join('\t')
+  );
+  return `Código\tUbicación\tPallets\tPzs/pallet\n` + lineas.join('\n');
+}
+
+function openCopySapModal(plId){
+  const p = DB.packinglists.find(x=>x.id===plId);
+  if(!p) return;
+  const texto = buildSapText(p);
+  const bg=document.createElement('div');
+  bg.className='modal-bg';
+  bg.innerHTML=`<div class="modal" style="max-width:520px;">
+    <h3>📋 Copiar para SAP — ${p.numero||''}</h3>
+    <p>Selecciona todo y copia, o pulsa el botón. Formato con tabuladores, listo para pegar en una tabla de SAP o Excel.</p>
+    <textarea id="sapText" readonly style="width:100%;height:180px;padding:10px;border:1.5px solid var(--line);border-radius:10px;font-family:monospace;font-size:12.5px;">${texto}</textarea>
+    <div class="modal-actions">
+      <button class="btn btn-outline" id="sapClose">Cerrar</button>
+      <button class="btn btn-primary" id="sapCopy">📋 Copiar al portapapeles</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+  const ta = bg.querySelector('#sapText');
+  ta.onclick=()=>{ ta.select(); };
+  bg.querySelector('#sapClose').onclick=()=>bg.remove();
+  bg.querySelector('#sapCopy').onclick=async ()=>{
+    try{
+      await navigator.clipboard.writeText(texto);
+      toast('Copiado al portapapeles.');
+    }catch(e){
+      ta.select(); document.execCommand('copy');
+      toast('Copiado (selección manual).');
+    }
+    // Deja constancia de quién y cuándo se copió, para que quede registrado.
+    p.copiadoSap = { usuario: SESSION.usuario, fecha: Date.now() };
+    savePL(p);
+  };
+}
+
 function bindListas(all){
   const btnNuevo=document.getElementById('btnNuevoPL');
   if(btnNuevo) btnNuevo.onclick=()=>{ const pl=getActivePL(true); savePL(pl); toast('Nuevo packing list creado.'); render(); };
@@ -1350,6 +1395,10 @@ function bindListas(all){
 
   document.querySelectorAll('[data-confirmarubicar]').forEach(b=>{
     b.onclick=(e)=>{ e.stopPropagation(); openConfirmarUbicarModal(b.dataset.confirmarubicar); };
+  });
+
+  document.querySelectorAll('[data-copysap]').forEach(b=>{
+    b.onclick=(e)=>{ e.stopPropagation(); openCopySapModal(b.dataset.copysap); };
   });
 }
 
