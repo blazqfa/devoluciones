@@ -192,7 +192,8 @@ tr:last-child td{border-bottom:none;}
 .pldoc-grand{display:flex;justify-content:flex-end;font-weight:800;font-size:12pt;margin-top:4mm;border-top:1.5px solid #000;padding-top:2mm;}
 .pldoc-firmas{display:grid;grid-template-columns:1fr 1fr;gap:12mm;margin-top:14mm;font-size:9pt;}
 .pldoc-firmas div{border-top:1px solid #000;padding-top:2mm;text-align:center;}
-.print-page{width:277mm;height:190mm;display:flex;align-items:center;justify-content:center;}
+.print-page{width:277mm;height:190mm;display:flex;align-items:center;justify-content:center;break-after:page;page-break-after:always;}
+.print-page:last-child{break-after:auto;page-break-after:auto;}
 .label-sheet{width:250mm;height:158mm;position:relative;font-family:Arial,Helvetica,sans-serif;border:1.5px solid #000;border-radius:4px;display:flex;filter:grayscale(1);background:#fff;}
 .label-left{width:62mm;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;border-right:1.5px solid #000;padding:8mm;text-align:center;}
 .label-logo-img{width:100%;max-height:26mm;object-fit:contain;}
@@ -713,7 +714,7 @@ function renderContent(){
 }
 
 /* ================= NUEVA ETIQUETA ================= */
-let formState = { tipo:'EMBALAJE', codigo:'', descripcion:'', piezas:'', pallets:'', otro:false };
+let formState = { tipo:'EMBALAJE', codigo:'', descripcion:'', otro:false, lotes:[{pallets:'', piezas:''}] };
 
 function renderNuevaEtiqueta(){
   return `
@@ -748,10 +749,20 @@ function renderNuevaEtiqueta(){
         : `<div class="desc-preview">${escapeHtml(formState.descripcion) || 'Se autocompletará al elegir el código…'}</div>`}
     </div>
 
-    <div class="grid2">
-      <div class="field"><label>Cantidad de pallets</label><input id="fPallets" type="number" min="0" step="1" value="${formState.pallets}"></div>
-      <div class="field"><label>Piezas por pallet</label><input id="fPiezas" type="number" min="0" step="1" placeholder="Introduce la cantidad" value="${formState.piezas}"></div>
+    <div id="lotesWrap">
+      ${formState.lotes.map((l,idx)=>`
+        <div class="grid2" data-lote-row="${idx}" style="align-items:end;">
+          <div class="field"><label>Cantidad de pallets${formState.lotes.length>1?` · lote ${idx+1}`:''}</label><input class="lote-pallets" data-idx="${idx}" type="number" min="0" step="1" value="${l.pallets}"></div>
+          <div class="field">
+            <label>Piezas por pallet${formState.lotes.length>1?` · lote ${idx+1}`:''}</label>
+            <div style="display:flex;gap:8px;">
+              <input class="lote-piezas" data-idx="${idx}" type="number" min="0" step="1" placeholder="Introduce la cantidad" value="${l.piezas}" style="flex:1;">
+              ${formState.lotes.length>1?`<button class="btn btn-danger btn-sm" data-lote-del="${idx}" title="Quitar este lote">✕</button>`:''}
+            </div>
+          </div>
+        </div>`).join('')}
     </div>
+    <button class="btn btn-outline btn-sm" id="btnAddLote" style="margin:2px 0 16px;">➕ Añadir otro lote (mismo artículo, distinta cantidad)</button>
 
     <div class="pl-actions">
       <button class="btn btn-primary" id="btnGenerar">${formState.tipo==='EMBALAJE' ? '🖨️ Imprimir etiqueta A4' : '➕ Añadir al packing list'}</button>
@@ -762,10 +773,10 @@ function renderNuevaEtiqueta(){
 
 function bindNuevaEtiqueta(){
   document.querySelectorAll('[data-tipo]').forEach(b=>{
-    b.onclick=()=>{ formState.tipo=b.dataset.tipo; formState.codigo=''; formState.descripcion=''; formState.piezas=''; formState.otro=false; renderContent(); };
+    b.onclick=()=>{ formState.tipo=b.dataset.tipo; formState.codigo=''; formState.descripcion=''; formState.otro=false; formState.lotes=[{pallets:'',piezas:''}]; renderContent(); };
   });
   const codigoInput=document.getElementById('fCodigo');
-  document.getElementById('fOtro').onchange=(e)=>{ formState.otro=e.target.checked; formState.codigo=''; formState.descripcion=''; formState.piezas=''; renderContent(); };
+  document.getElementById('fOtro').onchange=(e)=>{ formState.otro=e.target.checked; formState.codigo=''; formState.descripcion=''; renderContent(); };
 
   function showMismatchWarning(){
     const w = document.getElementById('mismatchWarning');
@@ -818,10 +829,14 @@ function bindNuevaEtiqueta(){
     showMismatchWarning();
   }
 
-  document.getElementById('fPallets').oninput=(e)=>{ formState.pallets=e.target.value; };
-  document.getElementById('fPiezas').oninput=(e)=>{ formState.piezas=e.target.value; };
+  document.querySelectorAll('.lote-pallets').forEach(inp=>{ inp.oninput=(e)=>{ formState.lotes[inp.dataset.idx].pallets=e.target.value; }; });
+  document.querySelectorAll('.lote-piezas').forEach(inp=>{ inp.oninput=(e)=>{ formState.lotes[inp.dataset.idx].piezas=e.target.value; }; });
+  document.getElementById('btnAddLote').onclick=()=>{ formState.lotes.push({pallets:'',piezas:''}); renderContent(); };
+  document.querySelectorAll('[data-lote-del]').forEach(b=>{
+    b.onclick=()=>{ formState.lotes.splice(Number(b.dataset.loteDel),1); renderContent(); };
+  });
 
-  document.getElementById('btnLimpiar').onclick=()=>{ formState={tipo:formState.tipo, codigo:'', descripcion:'', piezas:'', pallets:'', otro:false}; renderContent(); };
+  document.getElementById('btnLimpiar').onclick=()=>{ formState={tipo:formState.tipo, codigo:'', descripcion:'', otro:false, lotes:[{pallets:'',piezas:''}]}; renderContent(); };
 
   document.getElementById('btnGenerar').onclick=async ()=>{
     if(!formState.codigo.trim()){ toast('Introduce un código de artículo.'); return; }
@@ -830,18 +845,24 @@ function bindNuevaEtiqueta(){
       const otherTipo = crossTypeMismatch(formState.tipo, formState.codigo);
       if(otherTipo){ toast(`Este código pertenece a ${otherTipo}, no a ${formState.tipo}. Cambia el tipo de material.`); return; }
     }
-    if(!formState.pallets || Number(formState.pallets)<=0){ toast('Indica la cantidad de pallets.'); return; }
-    if(!formState.piezas || Number(formState.piezas)<=0){ toast('Indica las piezas por pallet.'); return; }
+    for(let i=0;i<formState.lotes.length;i++){
+      const l = formState.lotes[i];
+      if(!l.pallets || Number(l.pallets)<=0){ toast(`Indica la cantidad de pallets del lote ${i+1}.`); return; }
+      if(!l.piezas || Number(l.piezas)<=0){ toast(`Indica las piezas por pallet del lote ${i+1}.`); return; }
+    }
 
-    const item = {
-      id: 'it_'+Date.now()+Math.random().toString(36).slice(2,6),
+    // Un artículo por cada lote (misma referencia, cantidades distintas). Cada
+    // uno se guarda como su propia línea — nunca se suman entre sí aunque
+    // coincida el código, para no perder la diferencia de piezas/pallet.
+    const items = formState.lotes.map(l => ({
+      id: 'it_'+Date.now()+Math.random().toString(36).slice(2,6)+'_'+Math.random().toString(36).slice(2,4),
       tipo: formState.tipo,
       codigo: formState.codigo.trim(),
       descripcion: formState.descripcion.trim() || '(sin descripción)',
-      piezasPorPallet: Number(formState.piezas)||0,
-      cantidadPallet: Number(formState.pallets),
+      piezasPorPallet: Number(l.piezas)||0,
+      cantidadPallet: Number(l.pallets),
       otro: formState.otro
-    };
+    }));
 
     // Admin y BLalmacén (rol "almacen") son personal interno: al imprimir/añadir
     // una etiqueta, el packing list se crea y se envía directamente a
@@ -858,38 +879,41 @@ function bindNuevaEtiqueta(){
       VIEW = SESSION.rol==='admin' ? 'comprobacion' : 'mislistas';
       render();
     }
+    function resetForm(){ formState={tipo:formState.tipo, codigo:'', descripcion:'', otro:false, lotes:[{pallets:'',piezas:''}]}; }
 
     if(formState.tipo==='EMBALAJE'){
-      printLabel(item, async ()=>{
+      printLabels(items, async ()=>{
         if(esInterno){
-          const pl = addItemToPL(item);
-          formState={tipo:'EMBALAJE',codigo:'',descripcion:'',piezas:'',pallets:'',otro:false};
-          await autoEnviar(pl, 'Etiqueta impresa. Pendiente de validar (ENTRADA OK).');
+          let pl; items.forEach(it=>{ pl = addItemToPL(it); });
+          resetForm();
+          await autoEnviar(pl, `${items.length>1?items.length+' etiquetas impresas':'Etiqueta impresa'}. Pendiente de validar (ENTRADA OK).`);
         } else {
           showModal({
             title:'¿Agregar al packing list?',
-            body:`${item.codigo} — ${item.cantidadPallet} pallet(s). ¿Quieres añadirlo a tu packing list en curso?`,
+            body: items.length>1
+              ? `${items.length} lotes de ${items[0].codigo} (${items.reduce((s,i)=>s+i.cantidadPallet,0)} pallets en total). ¿Quieres añadirlos a tu packing list en curso?`
+              : `${items[0].codigo} — ${items[0].cantidadPallet} pallet(s). ¿Quieres añadirlo a tu packing list en curso?`,
             actions:[
               {label:'No, gracias', cls:'btn-outline', dismiss:true},
-              {label:'Sí, agregar', cls:'btn-primary', onClick:()=>{ addItemToPL(item); toast('Añadido al packing list.'); formState={tipo:'EMBALAJE',codigo:'',descripcion:'',piezas:'',pallets:'',otro:false}; renderContent(); }}
+              {label:'Sí, agregar', cls:'btn-primary', onClick:()=>{ items.forEach(it=>addItemToPL(it)); toast('Añadido al packing list.'); resetForm(); renderContent(); }}
             ]
           });
         }
       });
     } else {
-      const pl = addItemToPL(item);
-      formState={tipo:'VIDRIO',codigo:'',descripcion:'',piezas:'',pallets:'',otro:false};
+      let pl; items.forEach(it=>{ pl = addItemToPL(it); });
+      resetForm();
       if(esInterno){
         await autoEnviar(pl, 'Añadido. Pendiente de validar (ENTRADA OK).');
       } else {
-        toast('Añadido al packing list.');
+        toast(items.length>1 ? `${items.length} lotes añadidos al packing list.` : 'Añadido al packing list.');
         renderContent();
       }
     }
   };
 }
 
-function buildLabelHtml(item){
+function buildLabelHtml(item, uid){
   const now = new Date();
   // El QR lleva el identificador único del artículo (item.id). No usamos el
   // número de packing list porque normalmente se imprime la etiqueta ANTES de
@@ -912,42 +936,59 @@ function buildLabelHtml(item){
           <div class="label-box"><div class="lb">Cantidad de pallets</div><div class="lv">${item.cantidadPallet}</div></div>
           <div class="label-box"><div class="lb">Piezas por pallet</div><div class="lv">${item.piezasPorPallet||'-'}</div></div>
         </div>
-        <div class="label-barcode"><svg id="printBarcode"></svg></div>
+        <div class="label-barcode"><svg id="printBarcode_${uid}"></svg></div>
         <div class="label-bottom-row">
-          <div class="label-qr" id="printQr"></div>
+          <div class="label-qr" id="printQr_${uid}"></div>
           <div class="label-datetime"><b>Impreso: ${fmtDateTime(now)}</b>Escanea el QR para confirmar la entrada</div>
         </div>
       </div>
     </div>
     </div>`;
 }
-function doPrintLabel(item){
-  document.getElementById('printArea').innerHTML = buildLabelHtml(item);
-  try{
-    JsBarcode('#printBarcode', item.codigo, {format:'CODE128', width:1.6, height:38, displayValue:true, fontSize:11, margin:0});
-  }catch(e){ console.error('barcode error', e); }
-  try{
-    document.getElementById('printQr').innerHTML='';
-    new QRCode(document.getElementById('printQr'), {text:String(item.id||item.codigo), width:150, height:150, correctLevel:QRCode.CorrectLevel.M});
-  }catch(e){ console.error('qr error', e); }
-  setTimeout(()=>window.print(), 120); // pequeña espera para que el QR/barcode terminen de dibujarse
+/* Imprime una o varias etiquetas (una hoja A4 por cada una) en un solo trabajo de impresión. */
+function doPrintLabels(items){
+  document.getElementById('printArea').innerHTML = items.map((it,idx)=>buildLabelHtml(it,idx)).join('');
+  items.forEach((it,idx)=>{
+    try{
+      JsBarcode(`#printBarcode_${idx}`, it.codigo, {format:'CODE128', width:1.6, height:38, displayValue:true, fontSize:11, margin:0});
+    }catch(e){ console.error('barcode error', e); }
+    try{
+      const el = document.getElementById(`printQr_${idx}`);
+      el.innerHTML='';
+      new QRCode(el, {text:String(it.id||it.codigo), width:150, height:150, correctLevel:QRCode.CorrectLevel.M});
+    }catch(e){ console.error('qr error', e); }
+  });
+  setTimeout(()=>window.print(), 150); // pequeña espera para que el QR/barcode terminen de dibujarse
 }
-/* Shows a preview of the label before sending it to the printer. onClose(printed) fires after the modal is dismissed either way. */
-function printLabel(item, onClose){
+function doPrintLabel(item){ doPrintLabels([item]); }
+
+/* Muestra una vista previa antes de imprimir. onClose(printed) se llama al cerrar el modal, se imprima o no.
+   Acepta un único item o un array (varios lotes del mismo artículo). */
+function printLabels(itemsOrItem, onClose){
+  const items = Array.isArray(itemsOrItem) ? itemsOrItem : [itemsOrItem];
+  const totalPallets = items.reduce((s,i)=>s+i.cantidadPallet,0);
   const bg=document.createElement('div');
   bg.className='modal-bg';
-  bg.innerHTML=`<div class="modal" style="max-width:420px;">
-    <h3>Vista previa de la etiqueta</h3>
+  const cuerpo = items.length===1 ? `
     <div style="border:1.5px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;background:#fbfcfd;">
-      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700;">${item.tipo}</div>
-      <div style="font-size:24px;font-weight:800;color:var(--brand-dark);line-height:1.15;word-break:break-word;">${escapeHtml(item.codigo)}</div>
-      <div style="font-size:14.5px;margin:8px 0 12px;color:var(--ink);">${escapeHtml(item.descripcion)}</div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700;">${items[0].tipo}</div>
+      <div style="font-size:24px;font-weight:800;color:var(--brand-dark);line-height:1.15;word-break:break-word;">${escapeHtml(items[0].codigo)}</div>
+      <div style="font-size:14.5px;margin:8px 0 12px;color:var(--ink);">${escapeHtml(items[0].descripcion)}</div>
       <div style="display:flex;gap:18px;font-size:13.5px;">
-        <div><b>${item.cantidadPallet}</b> pallets</div>
-        <div><b>${item.piezasPorPallet||'-'}</b> piezas/pallet</div>
+        <div><b>${items[0].cantidadPallet}</b> pallets</div>
+        <div><b>${items[0].piezasPorPallet||'-'}</b> piezas/pallet</div>
       </div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted);">Usuario: ${SESSION.usuario} · Se imprimirá en A4</div>
-    </div>
+    </div>` : `
+    <div style="border:1.5px solid var(--line);border-radius:10px;padding:16px;margin:12px 0;background:#fbfcfd;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;font-weight:700;">${items[0].tipo} · ${items.length} lotes de ${escapeHtml(items[0].codigo)}</div>
+      <div style="font-size:14.5px;margin-bottom:10px;color:var(--ink);">${escapeHtml(items[0].descripcion)}</div>
+      ${items.map((it,i)=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-top:1px solid var(--line);"><span>Lote ${i+1}</span><span><b>${it.cantidadPallet}</b> pallets · <b>${it.piezasPorPallet||'-'}</b> pzs/pallet</span></div>`).join('')}
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted);">Usuario: ${SESSION.usuario} · Total ${totalPallets} pallets · Se imprimirán ${items.length} etiquetas A4</div>
+    </div>`;
+  bg.innerHTML=`<div class="modal" style="max-width:440px;">
+    <h3>Vista previa de la${items.length>1?'s etiquetas':' etiqueta'}</h3>
+    ${cuerpo}
     <div class="modal-actions">
       <button class="btn btn-outline" id="lpCancel">Cancelar</button>
       <button class="btn btn-primary" id="lpPrint">🖨️ Imprimir</button>
@@ -955,8 +996,10 @@ function printLabel(item, onClose){
   </div>`;
   document.body.appendChild(bg);
   bg.querySelector('#lpCancel').onclick=()=>{ bg.remove(); onClose && onClose(false); };
-  bg.querySelector('#lpPrint').onclick=()=>{ bg.remove(); doPrintLabel(item); onClose && onClose(true); };
+  bg.querySelector('#lpPrint').onclick=()=>{ bg.remove(); doPrintLabels(items); onClose && onClose(true); };
 }
+// Alias retrocompatible (se usa en el botón de reimprimir, un solo artículo).
+function printLabel(item, onClose){ printLabels(item, onClose); }
 
 /* Get or create the active (draft) PL for current user */
 function getActivePL(forceNew){
@@ -999,7 +1042,10 @@ async function confirmSendPL(plId, skipCapataz){
 function addItemToPL(item, forceNew){
   const pl = getActivePL(forceNew);
   if(!item.otro){
-    const existing = pl.items.find(i=>i.tipo===item.tipo && i.codigo===item.codigo && !i.otro);
+    // Solo se fusiona con una línea existente si además coincide piezas/pallet:
+    // así dos lotes del mismo código con cantidades distintas nunca se mezclan
+    // y se pierda esa diferencia.
+    const existing = pl.items.find(i=>i.tipo===item.tipo && i.codigo===item.codigo && !i.otro && i.piezasPorPallet===item.piezasPorPallet);
     if(existing){ existing.cantidadPallet += item.cantidadPallet; savePL(pl); return pl; }
   }
   pl.items.push(item);
