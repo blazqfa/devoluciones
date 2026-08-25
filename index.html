@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
 <title>Bormioli · Gestión de Devoluciones</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.12.3/JsBarcode.all.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
 :root{
@@ -154,6 +154,8 @@ tr:last-child td{border-bottom:none;}
 
 /* ---------- Modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(20,35,42,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;}
+@keyframes flashRedScreen{0%{background:rgba(20,35,42,.45);}20%{background:rgba(212,48,35,.65);}100%{background:rgba(20,35,42,.45);}}
+.scan-flash-error{animation:flashRedScreen .6s ease;}
 .modal{background:#fff;border-radius:16px;padding:26px;max-width:420px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.25);}
 .modal h3{margin:0 0 8px;font-size:17px;}
 .modal p{color:var(--muted);font-size:14px;line-height:1.5;}
@@ -555,6 +557,24 @@ function escapeHtml(str){
   return String(str==null?'':str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// Pitido corto (sin necesidad de archivos de audio) para el modo lectura:
+// agudo y breve en confirmaciones correctas, grave en errores.
+function playBeep(freq, duration, type){
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    gain.gain.value = 0.18;
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(()=>{ try{ osc.stop(); ctx.close(); }catch(e){} }, duration);
+  }catch(e){ console.error('beep error', e); }
 }
 
 function toast(msg){
@@ -1135,10 +1155,13 @@ function renderBlock(tipo, items, p, canEdit){
   const subtotal = items.reduce((s,i)=>s+i.cantidadPallet,0);
   const showConfirm = p.enviado!==false && p.estado!=='ENTRADA OK';
   const showUbic = items.some(i=>i.ubicacionPropuesta || i.ubicacionConfirmada);
+  // Antes de proponer ubicación, muestra ya en el detalle si hay stock de ese
+  // código para poder agrupar (o si no hay, avisa de que tocará asignación manual).
+  const showSugerencia = p.estado==='COMPROBADA';
   return `
   <div class="block-title">${tipo}</div>
   <div class="tbl-wrap"><table>
-    <tr>${showConfirm?'<th></th>':''}<th>Código</th><th>Descripción</th><th>Pallets</th><th>Pzs/pallet</th>${showUbic?'<th>Ubicación</th>':''}${canEdit?'<th></th>':''}</tr>
+    <tr>${showConfirm?'<th></th>':''}<th>Código</th><th>Descripción</th><th>Pallets</th><th>Pzs/pallet</th>${showUbic?'<th>Ubicación</th>':''}${showSugerencia?'<th>Stock existente (sugerencia)</th>':''}${canEdit?'<th></th>':''}</tr>
     ${items.map(i=>`<tr class="${i.confirmado?'row-confirmado':''}">
       ${showConfirm?`<td>${i.confirmado?'<span title="Confirmado por lectura" style="color:var(--ok);font-weight:700;">✔</span>':'<span title="Pendiente de leer" style="color:var(--muted);">○</span>'}</td>`:''}
       <td>${escapeHtml(i.codigo)}${i.otro?'<span class="tag-otro">OTRO</span>':''}</td>
@@ -1146,6 +1169,7 @@ function renderBlock(tipo, items, p, canEdit){
       <td>${i.cantidadPallet}</td>
       <td>${i.piezasPorPallet||'-'}</td>
       ${showUbic?`<td>${i.ubicacionConfirmada?`<b>${escapeHtml(i.ubicacionConfirmada)}</b>`:(i.ubicacionPropuesta?`<span style="color:var(--muted);">${escapeHtml(i.ubicacionPropuesta)} (propuesta)</span>`:'—')}</td>`:''}
+      ${showSugerencia?`<td>${(()=>{ const s=sugerirUbicaciones(i.codigo); return s.length ? s.map(x=>`<span class="tag-otro" style="background:var(--ok-soft);color:var(--ok);">${escapeHtml(x[0])} (${escapeHtml(String(x[2]))})</span>`).join(' ') : `<span style="color:var(--muted);">Sin stock — asignación manual</span>`; })()}</td>`:''}
       ${canEdit?`<td style="white-space:nowrap;">
         ${i.tipo==='EMBALAJE'?`<button class="btn btn-outline btn-sm" data-reprint="${p.id}|${i.id}">🖨️</button>`:''}
         <button class="btn btn-danger btn-sm" data-removeitem="${p.id}|${i.id}">✕</button>
@@ -1428,11 +1452,14 @@ function openScanModal(plId){
     return `
     <div class="modal" style="max-width:480px;">
       <h3>📷 Modo lectura — ${p.numero||''}</h3>
-      <p>Escanea el QR de cada etiqueta con la pistola lectora. Se confirman solas al momento de leerlas (con Enter o automáticamente si la pistola no lo manda).</p>
+      <p>Escanea el QR de cada etiqueta con la pistola lectora. Se confirman solas al leerlas.</p>
       <div style="background:var(--brand-soft);border-radius:10px;padding:10px 14px;margin:10px 0;font-weight:700;color:var(--brand-dark);">
         ${hechos} / ${total} confirmados
       </div>
-      <input id="scanInput" placeholder="Aquí debe estar el foco al escanear…" autocomplete="off" style="width:100%;padding:12px 14px;border:2px solid var(--brand);border-radius:10px;font-size:15px;">
+      <div style="display:flex;gap:8px;">
+        <input id="scanInput" placeholder="Aquí debe estar el foco al escanear…" autocomplete="off" style="flex:1;padding:12px 14px;border:2px solid var(--brand);border-radius:10px;font-size:15px;">
+        <button class="btn btn-primary" id="scanManual" title="Si la pistola no confirma sola, pulsa aquí">✔ Confirmar</button>
+      </div>
       <div id="scanFeedback" style="min-height:20px;margin-top:6px;font-size:13px;font-weight:700;"></div>
       <div id="scanList" style="max-height:260px;overflow-y:auto;margin-top:6px;">
         ${p.items.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid var(--line);font-size:13.5px;">
@@ -1458,24 +1485,41 @@ function openScanModal(plId){
       clearTimeout(debounceTimer);
       const val = input.value.trim();
       if(!val) return;
-      debounceTimer = setTimeout(()=>{ procesarLectura(val); input.value=''; }, 200);
+      debounceTimer = setTimeout(()=>{ procesarLectura(val); }, 150);
     });
+    // Botón manual, siempre disponible por si el autodetectado fallara.
+    bg.querySelector('#scanManual').onclick=()=>{
+      clearTimeout(debounceTimer);
+      const val = input.value.trim();
+      if(val) procesarLectura(val);
+    };
     focusInput();
   }
   function refresh(){
     bg.innerHTML = renderList();
     bindModalEvents();
   }
+  function flashError(){
+    bg.classList.remove('scan-flash-error'); void bg.offsetWidth; // reinicia la animación si se repite muy seguido
+    bg.classList.add('scan-flash-error');
+    setTimeout(()=>bg.classList.remove('scan-flash-error'), 650);
+    playBeep(220, 320, 'square');
+  }
   function procesarLectura(val){
+    const input = bg.querySelector('#scanInput');
+    if(input) input.value='';
     const feedback = bg.querySelector('#scanFeedback');
     const item = p.items.find(i=>i.id===val || i.codigo===val);
     if(!item){
       if(feedback){ feedback.style.color='var(--danger)'; feedback.textContent='⚠️ Ese código no pertenece a este packing list.'; }
       toast('⚠️ Ese código no pertenece a este packing list.');
+      flashError();
+      focusInput();
       return;
     }
     if(item.confirmado){
       if(feedback){ feedback.style.color='var(--muted)'; feedback.textContent=`${item.codigo} ya estaba confirmado.`; }
+      focusInput();
       return;
     }
     item.confirmado = true;
@@ -1483,15 +1527,16 @@ function openScanModal(plId){
     const autoComprobada = checkAutoComprobada(p);
     savePL(p);
     toast(`✔ ${item.codigo} confirmado.` + (autoComprobada ? ' Todo leído — packing list marcado COMPROBADA.' : ''));
+    playBeep(880, 130, 'sine');
     refresh();
     const feedback2 = bg.querySelector('#scanFeedback');
     if(feedback2){ feedback2.style.color='var(--ok)'; feedback2.textContent=`✔ ${item.codigo} confirmado`; }
   }
   function onKeydown(e){
-    if(e.key!=='Enter') return;
+    if(e.key!=='Enter' && e.key!=='Tab') return;
+    e.preventDefault();
     clearTimeout(debounceTimer);
     const val = e.target.value.trim();
-    e.target.value='';
     if(!val) return;
     procesarLectura(val);
   }
