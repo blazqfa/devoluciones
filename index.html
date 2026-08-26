@@ -1125,12 +1125,14 @@ function renderPLCard(p){
   const canEdit = (p.estado!=='ENTRADA OK') && (SESSION.rol==='admin' || p.usuario===SESSION.usuario);
   const canDelete = SESSION.rol==='admin';
   const canScan = !isDraft && p.estado==='SOL. ENVIADA' && (SESSION.rol==='capataz'||SESSION.rol==='admin');
+  const canUbicar = !isDraft && p.estado==='PTE. DE UBICAR' && (SESSION.rol==='almacen'||SESSION.rol==='admin');
   return `
   <div class="pl-card">
     <div class="pl-head" data-pl="${p.id}">
       <div><div class="pl-num">${p.numero || 'Borrador (sin enviar)'}</div><div class="pl-meta">${p.usuario} · ${fmtDateTime(new Date(p.creado))} · ${totalPallets} pallets</div></div>
       <div style="display:flex;align-items:center;gap:8px;">
         ${canScan ? `<button class="btn btn-secondary btn-sm" data-scan="${p.id}">📷 Modo lectura</button>` : ''}
+        ${canUbicar ? `<button class="btn btn-primary btn-sm" data-ubicar="${p.id}">📍 Ubicar y confirmar</button>` : ''}
         <span class="status-pill ${stCls}">${stLabel}</span>
       </div>
     </div>
@@ -1183,9 +1185,6 @@ function stateButtons(p){
   let btns='';
   if(p.estado==='SOL. ENVIADA' && (SESSION.rol==='capataz'||SESSION.rol==='admin')){
     btns += `<button class="btn btn-ok btn-sm" data-setstate="${p.id}|PTE. DE UBICAR">✔ Marcar COMPROBADA</button>`;
-  }
-  if(p.estado==='PTE. DE UBICAR' && (SESSION.rol==='almacen'||SESSION.rol==='admin')){
-    btns += `<button class="btn btn-primary btn-sm" data-ubicar="${p.id}">📍 Ubicar y confirmar</button>`;
   }
   if(p.estado==='UBICADO' && SESSION.rol==='admin'){
     btns += `<button class="btn btn-secondary btn-sm" data-copysap="${p.id}">📋 Copiar para SAP</button>`;
