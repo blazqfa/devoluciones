@@ -795,9 +795,10 @@ function renderNuevaEtiqueta(){
     <button class="btn btn-outline btn-sm" id="btnAddLote" style="margin:2px 0 16px;">➕ Añadir otro lote (mismo artículo, distinta cantidad)</button>
 
     <div class="pl-actions">
-      <button class="btn btn-primary" id="btnGenerar">${formState.tipo==='EMBALAJE' ? '🖨️ Imprimir etiqueta A4' : '➕ Añadir al packing list'}</button>
+      <button class="btn btn-primary" id="btnGenerar">${formState.tipo==='EMBALAJE' ? (SESSION.rol==='almacen' ? '💾 Guardar' : '🖨️ Imprimir etiqueta A4') : '➕ Añadir al packing list'}</button>
       <button class="btn btn-outline" id="btnLimpiar">Limpiar</button>
     </div>
+    ${(formState.tipo==='EMBALAJE' && SESSION.rol==='almacen') ? `<p class="sub" style="margin-top:10px;">No se imprime aquí. Se guarda directamente; imprime las etiquetas más tarde desde un ordenador conectado, en "Mis packing lists".</p>` : ''}
   </div>`;
 }
 
@@ -911,7 +912,14 @@ function bindNuevaEtiqueta(){
     }
     function resetForm(){ formState={tipo:formState.tipo, codigo:'', descripcion:'', otro:false, lotes:[{pallets:'',piezas:''}]}; }
 
-    if(formState.tipo==='EMBALAJE'){
+    if(formState.tipo==='EMBALAJE' && SESSION.rol==='almacen'){
+      // BLalmacén suele estar con datos móviles, sin conexión a la impresora de
+      // red: aquí solo se guarda. La etiqueta se imprime más tarde desde un
+      // ordenador conectado, en "Mis packing lists" (botón 🖨️ de cada línea).
+      let pl; items.forEach(it=>{ pl = addItemToPL(it); });
+      resetForm();
+      await autoEnviar(pl, `${items.length>1?items.length+' lotes guardados':'Guardado'}. Imprime la etiqueta más tarde desde un ordenador, en "Mis packing lists".`);
+    } else if(formState.tipo==='EMBALAJE'){
       printLabels(items, async ()=>{
         if(esInterno){
           let pl; items.forEach(it=>{ pl = addItemToPL(it); });
